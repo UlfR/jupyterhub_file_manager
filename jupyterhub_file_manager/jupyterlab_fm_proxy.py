@@ -28,15 +28,16 @@ class ProxyHandler(APIHandler):
             "DELETE": 204,
             "GET": 200,
         }
+        print('ESHKERE',hub_auth)
 
-
+        #print('ESHKERE', hub_auth._api_request(method=request.method, url=url, data=body))
         # noinspection PyProtectedMember
         if request.method == "GET":
             model = yield maybe_future(hub_auth._api_request(method=request.method, url=url))
         else:
             model = yield maybe_future(hub_auth._api_request(method=request.method, url=url, data=body))
 
-        print('_______MODEL', model)
+        #print('_______MODEL',  model)
         self.set_status(statuses[request.method])
         self.finish(json.dumps(model, default=date_default))
 
@@ -74,6 +75,7 @@ class CheckpointsHandler(ProxyHandler):
     @web.authenticated
     @gen.coroutine
     def get(self, path=''):
+        print('CheckpointsHandler__________________________', path)
         return self.proxy()
 
     @web.authenticated
