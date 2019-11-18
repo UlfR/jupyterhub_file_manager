@@ -1,2 +1,5 @@
-
+build
+dist
+jupyterhub_file_manager.egg-info
+jupyterhub_file_manager/__pycache__
 .autoversion
