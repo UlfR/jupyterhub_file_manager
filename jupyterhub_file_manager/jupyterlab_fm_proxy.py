@@ -12,15 +12,32 @@ class ProxyHandler(APIHandler):
     # FIXME
     @gen.coroutine
     def proxy(self):
-        # request = self.request
+        request = self.request
+        body = request.body
         # pdb.set_trace()
-        # print({'zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz, request': request})
+        print({'zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz, request': request, 'method': request.method, 'body': body})
+
         hub_auth = self.application.settings['hub_auth']
         hub_api_url = environ.get('JUPYTERHUB_API_URL')
-        url = url_path_join(hub_api_url, 'notebooks/?content=1')
-        # print({'qqqqqqqqqqqqqqqqqqqqqqqqq': url})
+        url = url_path_join(hub_api_url, 'notebooks/'+request.uri.split('contents/')[1])
+        print({'qqqqqqqqqqqqqqqqqqqqqqqqq': url})
+
+        statuses = {
+            "POST": 201,
+            "PUT": 201,
+            "DELETE": 204,
+            "GET": 200,
+        }
+
+
         # noinspection PyProtectedMember
-        model = yield maybe_future(hub_auth._api_request(method='GET', url=url))
+        if request.method == "GET":
+            model = yield maybe_future(hub_auth._api_request(method=request.method, url=url))
+        else:
+            model = yield maybe_future(hub_auth._api_request(method=request.method, url=url, data=body))
+
+        print('_______MODEL', model)
+        self.set_status(statuses[request.method])
         self.finish(json.dumps(model, default=date_default))
 
 
