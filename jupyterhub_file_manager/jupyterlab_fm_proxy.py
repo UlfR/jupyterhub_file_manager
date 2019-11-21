@@ -1,8 +1,10 @@
 # import pdb
 import json
+import socket
 from os import environ
 from tornado import gen, web
 from tornado.log import app_log
+from tornado.web import HTTPError
 from jupyter_client.jsonutil import date_default
 from notebook.utils import url_path_join, maybe_future
 from notebook.base.handlers import APIHandler, path_regex
@@ -17,17 +19,19 @@ class ProxyHandler(APIHandler):
         request = self.request
         body = request.body
         # pdb.set_trace()
-        #hub_auth = self.application.settings['hub_auth']
+
         hub_api_url = environ.get('JUPYTERHUB_API_URL')
         url = url_path_join(hub_api_url, 'notebooks/'+request.uri.split('contents/')[1])
 
         # noinspection PyProtectedMember
         if request.method == "GET":
-            model = yield maybe_future(self._api_request(method=request.method, url=url, with_status=True))
+            response = yield maybe_future(self._api_request(method=request.method, url=url, with_status=True))
         else:
-            model = yield maybe_future(self._api_request(method=request.method, url=url, data=body, with_status=True))
-        self.set_status(model['status'])
-        self.finish(json.dumps(model['data'], default=date_default))
+            response = yield maybe_future(self._api_request(method=request.method, url=url, data=body, with_status=True))
+
+        self.set_status(response.status_code)
+        #self.finish(json.dumps(model['data'], default=date_default))
+        self.finish(response.text)
 
     @gen.coroutine
     def _api_request(self, method, url, **kwargs):
@@ -56,49 +60,9 @@ class ProxyHandler(APIHandler):
                     + " single-user servers if the servers are not on the same host as the Hub."
                 )
             raise HTTPError(500, msg)
+        return r
 
-        data = None
-        if r.status_code == 404 and allow_404:
-            pass
-        elif r.status_code == 403:
-            app_log.error(
-                "I don't have permission to check authorization with JupyterHub, my auth token may have expired: [%i] %s",
-                r.status_code,
-                r.reason,
-            )
-            app_log.error(r.text)
-            raise HTTPError(
-                500, "Permission failure checking authorization, I may need a new token"
-            )
-        elif r.status_code >= 500:
-            app_log.error(
-                "Upstream failure verifying auth token: [%i] %s",
-                r.status_code,
-                r.reason,
-            )
-            app_log.error(r.text)
-            raise HTTPError(502, "Failed to check authorization (upstream problem)")
-        elif r.status_code >= 400:
-            app_log.warning(
-                "Failed to check authorization: [%i] %s", r.status_code, r.reason
-            )
-            app_log.warning(r.text)
-            msg = "Failed to check authorization"
-            # pass on error_description from oauth failure
-            try:
-                description = r.json().get("error_description")
-            except Exception:
-                pass
-            else:
-                msg += ": " + description
-            raise HTTPError(500, msg)
-        else:
-            if with_status:
-                data = {'status': r.status_code, 'data': r.json()}
-            else:
-                data = r.json()
 
-        return data
 
 
 # noinspection PyAbstractClass
