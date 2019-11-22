@@ -1,11 +1,11 @@
 # import pdb
-import json
+# import json
 import socket
 from os import environ
 from tornado import gen, web
 from tornado.log import app_log
 from tornado.web import HTTPError
-from jupyter_client.jsonutil import date_default
+# from jupyter_client.jsonutil import date_default
 from notebook.utils import url_path_join, maybe_future
 from notebook.base.handlers import APIHandler, path_regex
 import requests
@@ -37,8 +37,8 @@ class ProxyHandler(APIHandler):
     def _api_request(self, method, url, **kwargs):
         """Make an API request"""
         hub_auth = self.application.settings['hub_auth']
-        allow_404 = kwargs.pop('allow_404', False)
-        with_status = kwargs.pop('with_status', False)
+        # allow_404 = kwargs.pop('allow_404', False)
+        # with_status = kwargs.pop('with_status', False)
         headers = kwargs.setdefault('headers', {})
         headers.setdefault('Authorization', 'token %s' % hub_auth.api_token)
         if "cert" not in kwargs and hub_auth.certfile and hub_auth.keyfile:
@@ -61,8 +61,6 @@ class ProxyHandler(APIHandler):
                 )
             raise HTTPError(500, msg)
         return r
-
-
 
 
 # noinspection PyAbstractClass

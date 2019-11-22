@@ -1,6 +1,5 @@
 from jupyterhub.apihandlers import APIHandler
 from notebook.services.contents.filemanager import FileContentsManager
-from notebook.services.contents.filecheckpoints import FileCheckpoints
 from notebook.services.contents.handlers import ContentsHandler
 from notebook.services.contents.handlers import CheckpointsHandler
 from notebook.services.contents.handlers import ModifyCheckpointsHandler
@@ -28,6 +27,7 @@ class DBNotebookManager(FileContentsManager):
     def unshare(self, path, user):
         pass
 
+
 # noinspection PyAbstractClass
 class NotebooksAPIHandler(APIHandler, ContentsHandler):
     db_nm = None
@@ -44,6 +44,7 @@ class NotebooksAPIHandler(APIHandler, ContentsHandler):
             self.db_nm = DBNotebookManager(user=user)
         return self.db_nm
 
+
 # noinspection PyAbstractClass
 class CheckpointsAPIHandler(APIHandler, CheckpointsHandler):
     db_nm = None
@@ -59,6 +60,7 @@ class CheckpointsAPIHandler(APIHandler, CheckpointsHandler):
         ):
             self.db_nm = DBNotebookManager(user=user)
         return self.db_nm
+
 
 # noinspection PyAbstractClass
 class ModifyCheckpointsAPIHandler(APIHandler, ModifyCheckpointsHandler):
