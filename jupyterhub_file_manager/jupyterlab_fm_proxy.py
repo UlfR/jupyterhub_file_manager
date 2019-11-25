@@ -25,9 +25,9 @@ class ProxyHandler(APIHandler):
 
         # noinspection PyProtectedMember
         if request.method == "GET":
-            response = yield maybe_future(self._api_request(method=request.method, url=url, with_status=True))
+            response = yield maybe_future(self._api_request(method=request.method, url=url))
         else:
-            response = yield maybe_future(self._api_request(method=request.method, url=url, data=body, with_status=True))
+            response = yield maybe_future(self._api_request(method=request.method, url=url, data=body))
 
         self.set_status(response.status_code)
         #self.finish(json.dumps(model['data'], default=date_default))
