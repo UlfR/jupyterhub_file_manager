@@ -1,14 +1,19 @@
+# noinspection PyUnresolvedReferences
 import pdb
 # noinspection PyUnresolvedReferences
 import posix1e
 import os
 import base64
+import errno
+import stat
 from jupyterhub.apihandlers import APIHandler
 from notebook.services.contents.filemanager import FileContentsManager
 from notebook.services.contents.handlers import ContentsHandler
 from notebook.services.contents.handlers import CheckpointsHandler
 from notebook.services.contents.handlers import ModifyCheckpointsHandler
+from notebook.utils import is_hidden, is_file_hidden
 from tornado import gen, web
+# noinspection PyUnresolvedReferences
 from tornado.log import app_log
 
 # FIXME read from settings
@@ -170,33 +175,97 @@ class DBNotebookManager(FileContentsManager):
             raise web.HTTPError(403, 'Permission denied')
         return super()._copy(src, dest)
 
-    # FIXME
+    # FIXME if exists then check for write, if not then check for write on dir
     def _save_directory(self, os_path, model, path=''):
-        pass
+        if not self.is_path_accessible_for_write(os_path):
+            raise web.HTTPError(403, 'Permission denied')
+        return super()._save_directory(os_path, model, path)
 
-    # FIXME
     def delete_file(self, path):
-        pass
+        if not self.is_path_accessible_for_write(self._get_os_path(path.strip('/'))):
+            raise web.HTTPError(403, 'Permission denied')
+        return super().delete_file(path)
+
+    # FIXME if exists then check for write, if not then check for write on dir
+    def rename_file(self, old_path, new_path):
+        old_path = old_path.strip('/')
+        new_path = new_path.strip('/')
+        if new_path == old_path:
+            return
+        new_os_path = self._get_os_path(new_path)
+        old_os_path = self._get_os_path(old_path)
+        if not self.is_path_accessible_for_read(old_os_path):
+            raise web.HTTPError(403, 'Permission denied')
+        if not self.is_path_accessible_for_write(old_os_path):
+            raise web.HTTPError(403, 'Permission denied')
+        if not self.is_path_accessible_for_write(new_os_path):
+            raise web.HTTPError(403, 'Permission denied')
+        return super().rename_file(old_path, new_path)
+
+    def _base_model(self, path):
+        model = super()._notebook_model(path, path)
+        model['writable'] = self.is_path_accessible_for_write(self._get_os_path(path.strip('/')))
+        return model
+
+    def _notebook_model(self, path, content=True):
+        if not self.is_path_accessible_for_read(self._get_os_path(path.strip('/'))):
+            return None
+        return super()._notebook_model(path, content)
+
+    def _file_model(self, path, content=True, format=None):
+        if not self.is_path_accessible_for_read(self._get_os_path(path.strip('/'))):
+            return None
+        return super()._file_model(path, content, format)
 
     # FIXME
-    def rename_file(self, old_path, new_path):
-        pass
-
-    # FIXME + param to not raise 403 but return None or use _base_model
-    def _notebook_model(self, path, content=True):
-        pass
-
-    # FIXME + param to not raise 403 but return None or use _base_model
-    def _file_model(self, path, content=True, format=None):
-        pass
-
-    # FIXME + param to not raise 403 but return None or use _base_model
     def _dir_model(self, path, content=True):
-        pass
+        os_path = self._get_os_path(path)
+        four_o_four = u'directory does not exist: %r' % path
+        is_home_part = self.is_path_in_home(os_path)
 
-    # FIXME + param to not raise 403 but return None or use _TYPE_model
-    def _base_model(self, path):
-        pass
+        if not os.path.isdir(os_path):
+            raise web.HTTPError(404, four_o_four)
+        elif is_hidden(os_path, self.root_dir) and not self.allow_hidden:
+            self.log.info("Refusing to serve hidden directory %r, via 404 Error", os_path)
+            raise web.HTTPError(404, four_o_four)
+
+        model = self._base_model(path)
+        model['type'] = 'directory'
+        model['size'] = None
+        if content:
+            model['content'] = contents = []
+            os_dir = self._get_os_path(path)
+            list = os.listdir(os_dir)  # FIXME
+            for name in list:
+                try:
+                    os_path = os.path.join(os_dir, name)
+                except UnicodeDecodeError as e:
+                    self.log.warning("failed to decode filename '%s': %s", name, e)
+                    continue
+
+                try:
+                    st = os.lstat(os_path)
+                except OSError as e:
+                    # skip over broken symlinks in listing
+                    if e.errno == errno.ENOENT:
+                        self.log.warning("%s doesn't exist", os_path)
+                    else:
+                        self.log.warning("Error stat-ing %s: %s", os_path, e)
+                    continue
+
+                if (not stat.S_ISLNK(st.st_mode)
+                        and not stat.S_ISREG(st.st_mode)
+                        and not stat.S_ISDIR(st.st_mode)):
+                    self.log.debug("%s not a regular file", os_path)
+                    continue
+
+                if self.should_list(name):
+                    if self.allow_hidden or not is_file_hidden(os_path, stat_res=st):
+                        contents.append(self.get(path='%s/%s' % (path, name), content=False))  #FIXME
+
+            model['format'] = 'json'
+
+        return model
 
 
 # noinspection PyAbstractClass
