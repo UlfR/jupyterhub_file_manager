@@ -138,7 +138,7 @@ class DBNotebookManager(FileContentsManager):
         # return content.decode('utf8'), 'text'
         return content
 
-    # FIXME if exists then check for write, if not then check for write on dir; mkdir -p before write
+    # FIXME if exists then check for write, if not then check for write on dir; mkdir -p before write; chown and perms
     def save_raw(self, path, content):
         path = path.strip('/')
         os_path = self._get_os_path(path)
@@ -157,19 +157,19 @@ class DBNotebookManager(FileContentsManager):
             raise web.HTTPError(403, 'Permission denied')
         return super()._read_file(os_path, format)
 
-    # FIXME if exists then check for write, if not then check for write on dir
+    # FIXME if exists then check for write, if not then check for write on dir; chown and perms
     def _save_notebook(self, os_path, nb):
         if not self.is_path_accessible_for_write(os_path):
             raise web.HTTPError(403, 'Permission denied')
         return super()._save_notebook(os_path, nb)
 
-    # FIXME if exists then check for write, if not then check for write on dir
+    # FIXME if exists then check for write, if not then check for write on dir; chown and perms
     def _save_file(self, os_path, content, format):
         if not self.is_path_accessible_for_write(os_path):
             raise web.HTTPError(403, 'Permission denied')
         return super()._save_file(os_path, content, format)
 
-    # FIXME if exists then check for write, if not then check for write on dir
+    # FIXME if exists then check for write, if not then check for write on dir; chown and perms
     def _copy(self, src, dest):
         if not self.is_path_accessible_for_read(src):
             raise web.HTTPError(403, 'Permission denied')
@@ -177,7 +177,7 @@ class DBNotebookManager(FileContentsManager):
             raise web.HTTPError(403, 'Permission denied')
         return super()._copy(src, dest)
 
-    # FIXME if exists then check for write, if not then check for write on dir
+    # FIXME if exists then check for write, if not then check for write on dir; chown and perms
     def _save_directory(self, os_path, model, path=''):
         if not self.is_path_accessible_for_write(os_path):
             raise web.HTTPError(403, 'Permission denied')
@@ -188,7 +188,7 @@ class DBNotebookManager(FileContentsManager):
             raise web.HTTPError(403, 'Permission denied')
         return super().delete_file(path)
 
-    # FIXME if exists then check for write, if not then check for write on dir
+    # FIXME if exists then check for write, if not then check for write on dir; chown and perms
     def rename_file(self, old_path, new_path):
         old_path = old_path.strip('/')
         new_path = new_path.strip('/')
@@ -205,7 +205,7 @@ class DBNotebookManager(FileContentsManager):
         return super().rename_file(old_path, new_path)
 
     def _base_model(self, path):
-        model = super()._notebook_model(path, path)
+        model = super()._base_model(path)
         model['writable'] = self.is_path_accessible_for_write(self._get_os_path(path.strip('/')))
         return model
 
@@ -219,11 +219,17 @@ class DBNotebookManager(FileContentsManager):
             return None
         return super()._file_model(path, content, format)
 
-    # FIXME
     def _dir_model(self, path, content=True):
         os_path = self._get_os_path(path)
         four_o_four = u'directory does not exist: %r' % path
-        is_home_part = self.is_path_in_home(os_path)
+        can_read_p = self.is_path_accessible_for_read(os_path)
+        can_write_p = self.is_path_accessible_for_write(os_path)
+
+        app_log.info({
+            '----------------------------xxx': os_path,
+            'can_read_p': can_read_p,
+            'can_write_p': can_write_p,
+        })
 
         if not os.path.isdir(os_path):
             raise web.HTTPError(404, four_o_four)
@@ -234,39 +240,52 @@ class DBNotebookManager(FileContentsManager):
         model = self._base_model(path)
         model['type'] = 'directory'
         model['size'] = None
+        model['content'] = contents = []
+
         if content:
-            model['content'] = contents = []
             os_dir = self._get_os_path(path)
-            list = os.listdir(os_dir)  # FIXME
+            list = os.listdir(os_dir)
             for name in list:
                 try:
                     os_path = os.path.join(os_dir, name)
                 except UnicodeDecodeError as e:
                     self.log.warning("failed to decode filename '%s': %s", name, e)
                     continue
-
                 try:
                     st = os.lstat(os_path)
                 except OSError as e:
-                    # skip over broken symlinks in listing
                     if e.errno == errno.ENOENT:
                         self.log.warning("%s doesn't exist", os_path)
                     else:
                         self.log.warning("Error stat-ing %s: %s", os_path, e)
                     continue
-
-                if (not stat.S_ISLNK(st.st_mode)
-                        and not stat.S_ISREG(st.st_mode)
-                        and not stat.S_ISDIR(st.st_mode)):
+                if not stat.S_ISLNK(st.st_mode) and not stat.S_ISREG(st.st_mode) and not stat.S_ISDIR(st.st_mode):
                     self.log.debug("%s not a regular file", os_path)
                     continue
+                if not os.path.isdir(os_path) and not self.is_path_accessible_for_read(os_path):
+                    continue
+                if not self.should_list(name):
+                    continue
+                if not self.allow_hidden and is_file_hidden(os_path, stat_res=st):
+                    continue
 
-                if self.should_list(name):
-                    if self.allow_hidden or not is_file_hidden(os_path, stat_res=st):
-                        contents.append(self.get(path='%s/%s' % (path, name), content=False))  # FIXME
+                can_read = self.is_path_accessible_for_read(os_path)
+                can_write = self.is_path_accessible_for_write(os_path)
+
+                if not os.path.isdir(os_path):
+                    m = self.get(path='%s/%s' % (path, name), content=False) if can_read or can_write else None
+                else:
+                    m = self._dir_model(path='%s/%s' % (path, name), content=False)
+                    if (m is not None) and (m['content'] is None or len(m['content']) == 0) and (not can_read):
+                        m = None
+
+                if m is not None:
+                    contents.append(m)
 
             model['format'] = 'json'
 
+        if len(model['content']) == 0 and not can_read_p and not can_write_p:
+            model = None
         return model
 
 
