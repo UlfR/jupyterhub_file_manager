@@ -20,7 +20,7 @@ from tornado.log import app_log
 BASE_ROOT = '/tmp/notebooks/'
 
 
-# FIXME trash support
+# TODO trash support
 class DBNotebookManager(FileContentsManager):
     user = None
 
@@ -126,10 +126,11 @@ class DBNotebookManager(FileContentsManager):
     def unshare(self, path, user):
         pass
 
-    # FIXME check user rights
     def get_raw(self, path):
         path = path.strip('/')
         os_path = self._get_os_path(path)
+        if not self.is_path_accessible_for_read(os_path):
+            raise web.HTTPError(403, 'Permission denied')
         if not os.path.isfile(os_path):
             raise web.HTTPError(400, "Cannot read non-file %s" % os_path)
         with self.open(os_path, 'rb') as f:
@@ -137,11 +138,12 @@ class DBNotebookManager(FileContentsManager):
         # return content.decode('utf8'), 'text'
         return content
 
-    # FIXME check user rights
+    # FIXME if exists then check for write, if not then check for write on dir; mkdir -p before write
     def save_raw(self, path, content):
         path = path.strip('/')
         os_path = self._get_os_path(path)
-        # FIXME mkdir`s
+        if not self.is_path_accessible_for_write(os_path):
+            raise web.HTTPError(403, 'Permission denied')
         with self.atomic_writing(os_path, text=False) as f:
             f.write(content)
 
@@ -261,7 +263,7 @@ class DBNotebookManager(FileContentsManager):
 
                 if self.should_list(name):
                     if self.allow_hidden or not is_file_hidden(os_path, stat_res=st):
-                        contents.append(self.get(path='%s/%s' % (path, name), content=False))  #FIXME
+                        contents.append(self.get(path='%s/%s' % (path, name), content=False))  # FIXME
 
             model['format'] = 'json'
 
