@@ -8,6 +8,7 @@ import os
 import base64
 import errno
 import stat
+import time
 from jupyterhub.apihandlers import APIHandler
 from notebook.services.contents.filemanager import FileContentsManager
 from notebook.services.contents.handlers import ContentsHandler
@@ -15,67 +16,89 @@ from notebook.services.contents.handlers import CheckpointsHandler
 from notebook.services.contents.handlers import ModifyCheckpointsHandler
 from notebook.utils import is_hidden, is_file_hidden
 from tornado import gen, web
-# noinspection PyUnresolvedReferences
 from tornado.log import app_log
 
 
-def get_user_by_name(username):
-    all_users = pwd.getpwall()
-    all_group = grp.getgrall()
-    user_data = next(x for x in all_users if x.pw_name == username)
-    user_grps = list(x for x in all_group if username in x.gr_mem)
-    result = {
-        'user': user_data,
-        'group': user_grps,
-    }
-    return result
+class UserInfo:
+    updated_at = 0
+    all_users = []
+    all_groups = []
+
+    def __init__(self):
+        self.update_if_needed()
+
+    @staticmethod
+    def current_milli_time():
+        return int(round(time.time() * 1000))
+
+    def update_if_needed(self):
+        if self.current_milli_time() - self.updated_at > 60000:
+            self.update()
+
+    def update(self):
+        st = self.current_milli_time()
+        app_log.info({'----------------------------------->>>>>>>': 'UPDATE START'})
+        self.all_users = (pwd.getpwall())
+        self.all_groups = (grp.getgrall())
+        self.updated_at = self.current_milli_time()
+        fn = self.current_milli_time()
+        app_log.info({'----------------------------------->>>>>>>': 'UPDATE FINIS', 'at': fn - st})
+
+    def get_user_by_name(self, username):
+        self.update_if_needed()
+        user_data = next(x for x in self.all_users if x.pw_name == username)
+        user_grps = list(x for x in self.all_groups if username in x.gr_mem)
+        result = {
+            'user':  user_data,
+            'group': user_grps,
+        }
+        return result
+
+    def get_user_by_id(self, id):
+        self.update_if_needed()
+        user_data = next(x for x in self.all_users if x.pw_uid == id)
+        username = user_data.pw_name
+        user_grps = list(x for x in self.all_groups if username in x.gr_mem)
+        result = {
+            'user':  user_data,
+            'group': user_grps,
+        }
+        return result
+
+    def get_group_name_by_id(self, id):
+        self.update_if_needed()
+        group_data = next(x for x in self.all_groups if x.gr_gid == id)
+        return group_data.gr_name if group_data is not None else 'anonymous'
+
+    def get_user_name_by_id(self, id):
+        self.update_if_needed()
+        user_data = next(x for x in self.all_users if x.pw_uid == id)
+        return user_data.pw_name if user_data is not None else 'anonymous'
 
 
-def get_user_by_id(id):
-    all_users = pwd.getpwall()
-    all_group = grp.getgrall()
-    user_data = next(x for x in all_users if x.pw_uid == id)
-    username = user_data.pw_name
-    user_grps = list(x for x in all_group if username in x.gr_mem)
-    result = {
-        'user': user_data,
-        'group': user_grps,
-    }
-    return result
+user_info = UserInfo()
 
 
-def get_group_name_by_id(id):
-    all_groups = grp.getgrall()
-    group_data = next(x for x in all_groups if x.gr_gid == id)
-    return group_data.gr_name if group_data is not None else 'anonymous'
-
-
-def get_user_name_by_id(id):
-    all_users = pwd.getpwall()
-    user_data = next(x for x in all_users if x.pw_uid == id)
-    return user_data.pw_name if user_data is not None else 'anonymous'
-
-
-# TODO trash support
 class DBNotebookManager(FileContentsManager):
     user = None
     user_info = None
 
-    def __init__(self, user=None, config={}, **kwargs):
+    def __init__(self, user=None, config=None, **kwargs):
         super().__init__(**kwargs)
         self.user = user
-        self.config = config.DBNotebookManager
-        self.user_info = get_user_by_name(self.user_name)
+        self.config = config.DBNotebookManager if config is not None else None
+
+    def set_user_info(self):
+        if self.user_info is not None:
+            return self.user_info
+        self.user_info = user_info.get_user_by_name(self.user_name)
+        return self.user_info
 
     @property
     def user_name(self):
         return self.user.name if self.user else 'anonymous'
 
-    @property
     def group_names(self):
-        if self.user_info is None:
-            return []
-
         grps = self.user_info['group']
         if grps is None:
             return []
@@ -105,7 +128,9 @@ class DBNotebookManager(FileContentsManager):
         statinfo = os.stat(os_path)
         uid = statinfo.st_uid
         gid = statinfo.st_gid
-        return [get_user_name_by_id(uid), get_group_name_by_id(gid)]
+        u_name = user_info.get_user_name_by_id(uid)
+        g_name = user_info.get_group_name_by_id(gid)
+        return [u_name, g_name]
 
     def is_path_in_root(self, os_path):
         abs_path = os.path.abspath(os_path)
@@ -116,8 +141,10 @@ class DBNotebookManager(FileContentsManager):
         return os.path.commonprefix([self.home_dir, abs_path]) == self.home_dir
 
     def get_path_permissions(self, os_path):
+        self.set_user_info()
+
         user_name = self.user_name
-        user_groups = self.group_names
+        user_groups = self.group_names()
         owner_user, owner_group = self.get_path_owner(os_path)
         acls = self.get_acl(os_path)
 
@@ -308,6 +335,8 @@ class DBNotebookManager(FileContentsManager):
         os_path = self._get_os_path(path)
         four_o_four = u'directory does not exist: %r' % path
         visibles = self._get_visibles()
+
+        app_log.info({'#########################################': self.user_info})
 
         if not os.path.isdir(os_path):
             raise web.HTTPError(404, four_o_four)
