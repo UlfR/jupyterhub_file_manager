@@ -216,17 +216,51 @@ class DBNotebookManager(FileContentsManager):
             return None
         return super()._file_model(path, content, format)
 
+    def _get_visibles(self, root=None):
+        if root is None:
+            root = self.root_dir
+
+        result = set()
+        list = os.listdir(root)
+        for name in list:
+            try:
+                os_path = os.path.join(root, name)
+            except UnicodeDecodeError as e:
+                self.log.warning("failed to decode filename '%s': %s", name, e)
+                continue
+            try:
+                st = os.lstat(os_path)
+            except OSError as e:
+                if e.errno == errno.ENOENT:
+                    self.log.warning("%s doesn't exist", os_path)
+                else:
+                    self.log.warning("Error stat-ing %s: %s", os_path, e)
+                continue
+            if not stat.S_ISLNK(st.st_mode) and not stat.S_ISREG(st.st_mode) and not stat.S_ISDIR(st.st_mode):
+                self.log.debug("%s not a regular file", os_path)
+                continue
+            if not self.should_list(name):
+                continue
+            if not self.allow_hidden and is_file_hidden(os_path, stat_res=st):
+                continue
+
+            can_read = self.is_path_accessible_for_read(os_path)
+            can_write = self.is_path_accessible_for_write(os_path)
+            if can_read or can_write:
+                result.add(os_path)
+
+            inner = self._get_visibles(os_path) if os.path.isdir(os_path) else set()
+            if len(inner) > 0:
+                result.add(root)
+                result.add(os_path)
+                result = result | inner
+
+        return result
+
     def _dir_model(self, path, content=True):
         os_path = self._get_os_path(path)
         four_o_four = u'directory does not exist: %r' % path
-        can_read_p = self.is_path_accessible_for_read(os_path)
-        can_write_p = self.is_path_accessible_for_write(os_path)
-
-        app_log.info({
-            '----------------------------xxx': os_path,
-            'can_read_p': can_read_p,
-            'can_write_p': can_write_p,
-        })
+        visibles = self._get_visibles()
 
         if not os.path.isdir(os_path):
             raise web.HTTPError(404, four_o_four)
@@ -259,30 +293,18 @@ class DBNotebookManager(FileContentsManager):
                 if not stat.S_ISLNK(st.st_mode) and not stat.S_ISREG(st.st_mode) and not stat.S_ISDIR(st.st_mode):
                     self.log.debug("%s not a regular file", os_path)
                     continue
-                if not os.path.isdir(os_path) and not self.is_path_accessible_for_read(os_path):
-                    continue
                 if not self.should_list(name):
                     continue
                 if not self.allow_hidden and is_file_hidden(os_path, stat_res=st):
                     continue
-
-                can_read = self.is_path_accessible_for_read(os_path)
-                can_write = self.is_path_accessible_for_write(os_path)
-
                 if not os.path.isdir(os_path):
-                    m = self.get(path='%s/%s' % (path, name), content=False) if can_read or can_write else None
+                    m = self.get(path='%s/%s' % (path, name), content=False) if os_path in visibles else None
                 else:
-                    m = self._dir_model(path='%s/%s' % (path, name), content=False)
-                    if (m is not None) and (m['content'] is None or len(m['content']) == 0) and (not can_read):
-                        m = None
-
+                    m = self._dir_model(path='%s/%s' % (path, name), content=False) if os_path in visibles else None
                 if m is not None:
                     contents.append(m)
-
             model['format'] = 'json'
 
-        if len(model['content']) == 0 and not can_read_p and not can_write_p:
-            model = None
         return model
 
 
