@@ -2,6 +2,8 @@
 import pdb
 # noinspection PyUnresolvedReferences
 import posix1e
+import grp
+import pwd
 import os
 import base64
 import errno
@@ -20,22 +22,67 @@ from tornado.log import app_log
 BASE_ROOT = '/tmp/notebooks/'
 
 
+def get_user_by_name(username):
+    all_users = pwd.getpwall()
+    all_group = grp.getgrall()
+    user_data = next(x for x in all_users if x.pw_name == username)
+    user_grps = list(x for x in all_group if username in x.gr_mem)
+    result = {
+        'user': user_data,
+        'group': user_grps,
+    }
+    return result
+
+
+def get_user_by_id(id):
+    all_users = pwd.getpwall()
+    all_group = grp.getgrall()
+    user_data = next(x for x in all_users if x.pw_uid == id)
+    username = user_data.pw_name
+    user_grps = list(x for x in all_group if username in x.gr_mem)
+    result = {
+        'user': user_data,
+        'group': user_grps,
+    }
+    return result
+
+
+def get_group_name_by_id(id):
+    all_groups = grp.getgrall()
+    group_data = next(x for x in all_groups if x.gr_gid == id)
+    return group_data.gr_name if group_data is not None else 'anonymous'
+
+
+def get_user_name_by_id(id):
+    all_users = pwd.getpwall()
+    user_data = next(x for x in all_users if x.pw_uid == id)
+    return user_data.pw_name if user_data is not None else 'anonymous'
+
+
 # TODO trash support
 class DBNotebookManager(FileContentsManager):
     user = None
+    user_info = None
 
     def __init__(self, user=None, **kwargs):
         super().__init__(**kwargs)
         self.user = user
+        self.user_info = get_user_by_name(self.user_name)
 
     @property
     def user_name(self):
         return self.user.name if self.user else 'anonymous'
 
-    # FIXME get group names
     @property
     def group_names(self):
-        return ['fixme']
+        if self.user_info is None:
+            return []
+
+        grps = self.user_info['group']
+        if grps is None:
+            return []
+
+        return list(x.gr_name for x in grps)
 
     @property
     def root_dir(self):
@@ -55,13 +102,12 @@ class DBNotebookManager(FileContentsManager):
         acl_str = acl.to_any_text(separator=b';').decode('utf-8')
         return list(map(lambda a: a.split(':'), acl_str.split(';')))
 
-    # FIXME ids to names
     # noinspection PyMethodMayBeStatic
     def get_path_owner(self, os_path):
         statinfo = os.stat(os_path)
         uid = statinfo.st_uid
         gid = statinfo.st_gid
-        return [uid, gid]
+        return [get_user_name_by_id(uid), get_group_name_by_id(gid)]
 
     def is_path_in_root(self, os_path):
         abs_path = os.path.abspath(os_path)
