@@ -18,9 +18,6 @@ from tornado import gen, web
 # noinspection PyUnresolvedReferences
 from tornado.log import app_log
 
-# FIXME read from settings
-BASE_ROOT = '/tmp/notebooks/'
-
 
 def get_user_by_name(username):
     all_users = pwd.getpwall()
@@ -64,9 +61,10 @@ class DBNotebookManager(FileContentsManager):
     user = None
     user_info = None
 
-    def __init__(self, user=None, **kwargs):
+    def __init__(self, user=None, config={}, **kwargs):
         super().__init__(**kwargs)
         self.user = user
+        self.config = config.DBNotebookManager
         self.user_info = get_user_by_name(self.user_name)
 
     @property
@@ -86,11 +84,11 @@ class DBNotebookManager(FileContentsManager):
 
     @property
     def root_dir(self):
-        return BASE_ROOT
+        return self.config.root_dir
 
     @property
     def home_dir(self):
-        return f'{BASE_ROOT}/{self.user.name}/'
+        return f'{self.root_dir}/{self.user.name}/'
 
     # FIXME chown on file
     def set_ownership(self, os_path):
@@ -370,7 +368,7 @@ class NotebooksAPIHandler(APIHandler, ContentsHandler):
                 self.db_nm.user and self.db_nm.user != 'anonymous' and
                 user != 'anonymous' and self.db_nm.user.name != user.name
         ):
-            self.db_nm = DBNotebookManager(user=user)
+            self.db_nm = DBNotebookManager(user=user, config=self.config)
         return self.db_nm
 
 
@@ -387,7 +385,7 @@ class RawDataHandler(APIHandler, ContentsHandler):
                 self.db_nm.user and self.db_nm.user != 'anonymous' and
                 user != 'anonymous' and self.db_nm.user.name != user.name
         ):
-            self.db_nm = DBNotebookManager(user=user)
+            self.db_nm = DBNotebookManager(user=user, config=self.config)
         return self.db_nm
 
     @web.authenticated
@@ -421,7 +419,7 @@ class CheckpointsAPIHandler(APIHandler, CheckpointsHandler):
                 self.db_nm.user and self.db_nm.user != 'anonymous' and
                 user != 'anonymous' and self.db_nm.user.name != user.name
         ):
-            self.db_nm = DBNotebookManager(user=user)
+            self.db_nm = DBNotebookManager(user=user, config=self.config)
         return self.db_nm
 
 
@@ -438,5 +436,5 @@ class ModifyCheckpointsAPIHandler(APIHandler, ModifyCheckpointsHandler):
                 self.db_nm.user and self.db_nm.user != 'anonymous' and
                 user != 'anonymous' and self.db_nm.user.name != user.name
         ):
-            self.db_nm = DBNotebookManager(user=user)
+            self.db_nm = DBNotebookManager(user=user, config=self.config)
         return self.db_nm
