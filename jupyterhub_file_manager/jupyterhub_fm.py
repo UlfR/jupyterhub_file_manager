@@ -9,6 +9,7 @@ import base64
 import errno
 import stat
 import time
+import xattr
 from jupyterhub.apihandlers import APIHandler
 from notebook.services.contents.filemanager import FileContentsManager
 from notebook.services.contents.handlers import ContentsHandler
@@ -17,7 +18,6 @@ from notebook.services.contents.handlers import ModifyCheckpointsHandler
 from notebook.utils import is_hidden, is_file_hidden
 from tornado import gen, web
 from tornado.log import app_log
-import pdb
 
 
 class UserInfo:
@@ -87,7 +87,7 @@ class DBNotebookManager(FileContentsManager):
     def __init__(self, user=None, config=None, **kwargs):
         super().__init__(**kwargs)
         self.user = user
-        #pdb.set_trace()
+        # pdb.set_trace()
         self.config = config.DBNotebookManager if config is not None else None
 
     def set_user_info(self):
@@ -117,6 +117,46 @@ class DBNotebookManager(FileContentsManager):
     def set_ownership(self, os_path):
         user = user_info.get_user_by_name(self.user.name)['user']
         os.chown(os_path, user.pw_uid, user.pw_gid)
+
+    # noinspection PyMethodMayBeStatic
+    def is_path_created_from_lab(self, os_path):
+        try:
+            result = xattr.getxattr(os_path, 'user.from_lab') == '1'
+        except OSError:
+            result = False
+        return result
+
+    # noinspection PyMethodMayBeStatic
+    def set_created_from_lab_marker(self, os_path):
+        try:
+            xattr.setxattr(os_path, 'user.from_lab', '1')
+        except OSError as e:
+            self.log.warning("Error set CFL %s: %s", os_path, e)
+
+    def set_path_downloadable(self, path):
+        os_path = self._get_os_path(path.strip('/'))
+        self.set_created_from_lab_marker(os_path)
+
+    def new_untitled(self, path='', type='', ext=''):
+        result = super().new_untitled(path, type, ext)
+        self.set_path_downloadable(path)
+        return result
+
+    def new(self, model=None, path=''):
+        result = super().new(model, path)
+        self.set_path_downloadable(path)
+        return result
+
+    def copy(self, from_path, to_path=None):
+        result = super().copy(from_path, to_path)
+        if self.is_path_created_from_lab(self._get_os_path(from_path.strip('/'))):
+            self.set_path_downloadable(to_path)
+        return result
+
+    def save(self, model, path=''):
+        result = super().save(model, path)
+        self.set_path_downloadable(path)
+        return result
 
     # noinspection PyMethodMayBeStatic
     def get_acl(self, os_path):
@@ -197,6 +237,7 @@ class DBNotebookManager(FileContentsManager):
     def unshare(self, path, user):
         pass
 
+    # noinspection PyMethodMayBeStatic
     def file_exist(self, os_path):
         return os.path.exists(os_path)
 
@@ -261,7 +302,6 @@ class DBNotebookManager(FileContentsManager):
             self.set_ownership(os_path)
         return result
 
-
     def _copy(self, src, dest):
         if not self.is_path_accessible_for_read(src):
             raise web.HTTPError(403, 'Permission denied')
@@ -272,7 +312,7 @@ class DBNotebookManager(FileContentsManager):
         return result
 
     def _save_directory(self, os_path, model, path=''):
-        #pdb.set_trace()
+        # pdb.set_trace()
         if not self.is_path_or_parent_accessible_for_write(os_path):
             raise web.HTTPError(403, 'Permission denied')
 
@@ -302,18 +342,31 @@ class DBNotebookManager(FileContentsManager):
 
     def _base_model(self, path):
         model = super()._base_model(path)
-        model['writable'] = self.is_path_accessible_for_write(self._get_os_path(path.strip('/')))
+        if model is not None:
+            model['writable'] = self.is_path_accessible_for_write(self._get_os_path(path.strip('/')))
         return model
 
     def _notebook_model(self, path, content=True):
-        if not self.is_path_accessible_for_read(self._get_os_path(path.strip('/'))):
+        os_path = self._get_os_path(path.strip('/'))
+        if not self.is_path_accessible_for_read(os_path):
             return None
-        return super()._notebook_model(path, content)
+        model = super()._notebook_model(path, content)
+        if model is not None:
+            model['downloadable'] = self.is_path_created_from_lab(os_path)
+            if not model['downloadable'] and content:
+                model['content'] = None
+        return model
 
     def _file_model(self, path, content=True, format=None):
-        if not self.is_path_accessible_for_read(self._get_os_path(path.strip('/'))):
+        os_path = self._get_os_path(path.strip('/'))
+        if not self.is_path_accessible_for_read(os_path):
             return None
-        return super()._file_model(path, content, format)
+        model = super()._file_model(path, content, format)
+        if model is not None:
+            model['downloadable'] = self.is_path_created_from_lab(os_path)
+        if not model['downloadable'] and content:
+            model['content'] = None
+        return model
 
     def _get_visibles(self, root=None):
         if root is None:
