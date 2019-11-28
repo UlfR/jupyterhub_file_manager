@@ -17,6 +17,7 @@ from notebook.services.contents.handlers import ModifyCheckpointsHandler
 from notebook.utils import is_hidden, is_file_hidden
 from tornado import gen, web
 from tornado.log import app_log
+import pdb
 
 
 class UserInfo:
@@ -86,6 +87,7 @@ class DBNotebookManager(FileContentsManager):
     def __init__(self, user=None, config=None, **kwargs):
         super().__init__(**kwargs)
         self.user = user
+        #pdb.set_trace()
         self.config = config.DBNotebookManager if config is not None else None
 
     def set_user_info(self):
@@ -102,8 +104,7 @@ class DBNotebookManager(FileContentsManager):
         grps = self.user_info['group']
         if grps is None:
             return []
-
-        return list(x.gr_name for x in grps)
+        return list(x.gr_name for x in grps).append(user_info.get_group_name_by_id(self.user_info['user'].pw_gid))
 
     @property
     def root_dir(self):
@@ -113,9 +114,9 @@ class DBNotebookManager(FileContentsManager):
     def home_dir(self):
         return f'{self.root_dir}/{self.user.name}/'
 
-    # FIXME chown on file
     def set_ownership(self, os_path):
-        pass
+        user = user_info.get_user_by_name(self.user.name)['user']
+        os.chown(os_path, user.pw_uid, user.pw_gid)
 
     # noinspection PyMethodMayBeStatic
     def get_acl(self, os_path):
@@ -147,7 +148,6 @@ class DBNotebookManager(FileContentsManager):
         user_groups = self.group_names()
         owner_user, owner_group = self.get_path_owner(os_path)
         acls = self.get_acl(os_path)
-
         result = '---'
         for acl in acls:
             acl_type, acl_object, acl_permissions = acl
@@ -197,6 +197,19 @@ class DBNotebookManager(FileContentsManager):
     def unshare(self, path, user):
         pass
 
+    def file_exist(self, os_path):
+        return os.path.exists(os_path)
+
+    def is_path_or_parent_accessible_for_write(self, os_path):
+        if self.file_exist(os_path):
+            if not self.is_path_accessible_for_write(os_path):
+                return False
+        else:
+            folder = '/'.join(os_path.split('/')[:-1])
+            if not self.is_path_accessible_for_write(folder):
+                return False
+        return True
+
     def get_raw(self, path):
         path = path.strip('/')
         os_path = self._get_os_path(path)
@@ -209,14 +222,16 @@ class DBNotebookManager(FileContentsManager):
         # return content.decode('utf8'), 'text'
         return content
 
-    # FIXME if exists then check for write, if not then check for write on dir; mkdir -p before write; chown and perms
     def save_raw(self, path, content):
         path = path.strip('/')
         os_path = self._get_os_path(path)
-        if not self.is_path_accessible_for_write(os_path):
+        is_new_file = not self.file_exist(os_path)
+        if not self.is_path_or_parent_accessible_for_write(os_path):
             raise web.HTTPError(403, 'Permission denied')
         with self.atomic_writing(os_path, text=False) as f:
             f.write(content)
+        if is_new_file:
+            self.set_ownership(os_path)
 
     def _read_notebook(self, os_path, as_version=4):
         if not self.is_path_accessible_for_read(os_path):
@@ -228,38 +243,48 @@ class DBNotebookManager(FileContentsManager):
             raise web.HTTPError(403, 'Permission denied')
         return super()._read_file(os_path, format)
 
-    # FIXME if exists then check for write, if not then check for write on dir; chown and perms
     def _save_notebook(self, os_path, nb):
-        if not self.is_path_accessible_for_write(os_path):
+        is_new_file = not self.file_exist(os_path)
+        if not self.is_path_or_parent_accessible_for_write(os_path):
             raise web.HTTPError(403, 'Permission denied')
-        return super()._save_notebook(os_path, nb)
+        result = super()._save_notebook(os_path, nb)
+        if is_new_file:
+            self.set_ownership(os_path)
+        return result
 
-    # FIXME if exists then check for write, if not then check for write on dir; chown and perms
     def _save_file(self, os_path, content, format):
-        if not self.is_path_accessible_for_write(os_path):
+        is_new_file = not self.file_exist(os_path)
+        if not self.is_path_or_parent_accessible_for_write(os_path):
             raise web.HTTPError(403, 'Permission denied')
-        return super()._save_file(os_path, content, format)
+        result = super()._save_file(os_path, content, format)
+        if is_new_file:
+            self.set_ownership(os_path)
+        return result
 
-    # FIXME if exists then check for write, if not then check for write on dir; chown and perms
+
     def _copy(self, src, dest):
         if not self.is_path_accessible_for_read(src):
             raise web.HTTPError(403, 'Permission denied')
-        if not self.is_path_accessible_for_write(dest):
+        if not self.is_path_or_parent_accessible_for_write(dest):
             raise web.HTTPError(403, 'Permission denied')
-        return super()._copy(src, dest)
+        result = super()._copy(src, dest)
+        self.set_ownership(dest)
+        return result
 
-    # FIXME if exists then check for write, if not then check for write on dir; chown and perms
     def _save_directory(self, os_path, model, path=''):
-        if not self.is_path_accessible_for_write(os_path):
+        #pdb.set_trace()
+        if not self.is_path_or_parent_accessible_for_write(os_path):
             raise web.HTTPError(403, 'Permission denied')
-        return super()._save_directory(os_path, model, path)
+
+        result = super()._save_directory(os_path, model, path)
+        self.set_ownership(os_path)
+        return result
 
     def delete_file(self, path):
         if not self.is_path_accessible_for_write(self._get_os_path(path.strip('/'))):
             raise web.HTTPError(403, 'Permission denied')
         return super().delete_file(path)
 
-    # FIXME if exists then check for write, if not then check for write on dir; chown and perms
     def rename_file(self, old_path, new_path):
         old_path = old_path.strip('/')
         new_path = new_path.strip('/')
@@ -269,9 +294,9 @@ class DBNotebookManager(FileContentsManager):
         old_os_path = self._get_os_path(old_path)
         if not self.is_path_accessible_for_read(old_os_path):
             raise web.HTTPError(403, 'Permission denied')
-        if not self.is_path_accessible_for_write(old_os_path):
+        if not self.is_path_or_parent_accessible_for_write(old_os_path):
             raise web.HTTPError(403, 'Permission denied')
-        if not self.is_path_accessible_for_write(new_os_path):
+        if not self.is_path_or_parent_accessible_for_write(new_os_path):
             raise web.HTTPError(403, 'Permission denied')
         return super().rename_file(old_path, new_path)
 
